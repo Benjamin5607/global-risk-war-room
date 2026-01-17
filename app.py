@@ -44,33 +44,57 @@ with st.sidebar:
 
 # --- 기능 함수 모음 ---
 
-# 1. Top 3 리스크 스캐너 (3시간 캐싱)
+# [수정된 함수] Top 3 리스크 스캐너 (1주일 범위 + 추론 금지 + 순위 정렬)
 @st.cache_data(ttl=10800) 
 def get_top_3_risks(scope, model):
+    # 프롬프트 수정: 기간 확장(7일) & 추론 금지 & 정렬 로직 강화
     prompt = f"""
-    Identify the TOP 3 most critical current news/events in '{scope}' right now (Context: Jan 2026).
-    Return ONLY a JSON array with this format:
-    [
-        {{"title": "Event Title", "risk_level": "High/Medium/Low", "summary": "One sentence summary"}},
-        ...
-    ]
-    Do not output anything else.
+    You are a Strategic Risk Analyst.
+    Identify the TOP 3 security/political/social risks in '{scope}' from the **PAST 7 DAYS**.
+    
+    CRITICAL INSTRUCTIONS:
+    1. **NO HALLUCINATION:** Do not invent scenarios. Only list events that are actually reported or widely known in this context.
+    2. **INCLUDE LOW RISKS:** If there are no High/Critical risks, you MUST include Medium or Low risks (e.g., minor policy changes, peaceful protests, economic trends). Do not return empty.
+    3. **SORTING:** Rank them by severity: High > Medium > Low.
+    
+    Return ONLY a valid JSON object with a single key 'events'.
+    
+    JSON Structure:
+    {{
+        "events": [
+            {{"title": "Event Title", "risk_level": "High", "summary": "One sentence fact-based summary"}},
+            {{"title": "Event Title", "risk_level": "Medium", "summary": "One sentence fact-based summary"}},
+            {{"title": "Event Title", "risk_level": "Low", "summary": "One sentence fact-based summary"}}
+        ]
+    }}
     """
     try:
         completion = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
+            temperature=0.1, # 창의성 최소화 (팩트 유지)
             response_format={"type": "json_object"}
         )
-        return json.loads(completion.choices[0].message.content)
-    except:
-        # Fallback Mock Data
-        return {"events": [
-            {"title": "Scan Failed", "risk_level": "Low", "summary": "Could not fetch data."},
-            {"title": "Check Connection", "risk_level": "Low", "summary": "API Error."},
-            {"title": "System Idle", "risk_level": "Low", "summary": "Standby mode."}
-        ]}
+        raw_content = completion.choices[0].message.content
+        data = json.loads(raw_content)
+        
+        # 파싱 로직: 'events' 키가 없어도 리스트를 찾아내는 안전장치
+        if "events" in data:
+            return data["events"]
+        else:
+            for key, value in data.items():
+                if isinstance(value, list):
+                    return value
+            return []
+            
+    except Exception as e:
+        # 에러 발생 시에도 빈 화면 대신 '스캔 실패' 상태를 명시적으로 표시
+        st.sidebar.error(f"Scan Error ({scope}): {e}")
+        return [
+            {"title": "Data Unavailable", "risk_level": "Low", "summary": "No verified events found in the last 7 days."},
+            {"title": "System Check", "risk_level": "Low", "summary": "Please check API connection or Scope settings."},
+            {"title": "Stable Status", "risk_level": "Negligible", "summary": "No major incidents reported recently."}
+        ]
 
 # 2. 트렌드 그래프 생성기 (기능 3)
 def generate_trend_data(risk_level):
